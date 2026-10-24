@@ -8,19 +8,21 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using Microsoft.Data.Sqlite;
+using Microsoft.Win32;
 using Forms = System.Windows.Forms;
 
 using Point = System.Windows.Point;
 using Canvas = System.Windows.Controls.Canvas;
 using WpfApplication = System.Windows.Application;
 using DrawingColor = System.Drawing.Color;
-using DrawingBrush = System.Drawing.SolidBrush;
 using DrawingPen = System.Drawing.Pen;
+using Path = System.IO.Path;
 
 namespace OneDriveMonitor
 {
@@ -29,6 +31,23 @@ namespace OneDriveMonitor
         public string Name { get; set; } = "";
         public long Size { get; set; }
         public string FormattedSize => MainWindow.FormatBytesStatic(Size);
+        public string ParentResourceId { get; set; } = "";
+        public string FullPath { get; set; } = "";
+        public int FileStatus { get; set; }
+        public string StatusIcon => FileStatus switch
+        {
+            8 => "⚠️",
+            3 => "▲",
+            1 => "▼",
+            _ => "⏳"
+        };
+        public string StatusText => FileStatus switch
+        {
+            8 => "Takıldı",
+            3 => "Yükleniyor",
+            1 => "İndiriliyor",
+            _ => "Kuyrukta"
+        };
     }
 
     public partial class MainWindow : Window
@@ -59,7 +78,12 @@ namespace OneDriveMonitor
         [DllImport("PowrProf.dll", SetLastError = true)]
         public static extern bool SetSuspendState(bool hibernate, bool forceCritical, bool disableWakeEvent);
 
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
         private const uint PROCESS_QUERY_INFORMATION = 0x0400;
+        private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+        private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
 
         private readonly string _syncDbPath = Environment.ExpandEnvironmentVariables(@"%LOCALAPPDATA%\Microsoft\OneDrive\settings\Personal\SyncEngineDatabase.db");
 
@@ -87,15 +111,17 @@ namespace OneDriveMonitor
         private double _sessionTotalBytesTransferred = 0;
 
         // Kilitli / Takılan Dosya Takibi (Watchdog)
-        private string _previousActiveFile = "";
-        private int _stuckFileCounter = 0;
+        private string _currentStuckFileName = "";
+        private string _currentStuckFilePath = "";
+        private int _stuckTickCount = 0;
 
         // Otonom Şema Takibi (PRAGMA schema_version)
         private readonly HashSet<string> _knownColumns = new(StringComparer.OrdinalIgnoreCase);
         private int _lastSchemaVersion = -1;
 
-        // UI Modu
+        // UI Modu & Kuyruk Verisi
         private bool _isPillMode = false;
+        private List<QueueItem> _allQueueItems = new();
 
         public MainWindow()
         {
@@ -121,6 +147,13 @@ namespace OneDriveMonitor
                 var workArea = SystemParameters.WorkArea;
                 Left = workArea.Right - Width - 20;
                 Top = workArea.Bottom - Height - 20;
+
+                // Windows 11 Fluent Dark Mode
+                var helper = new System.Windows.Interop.WindowInteropHelper(this);
+                int darkMode = 1;
+                DwmSetWindowAttribute(helper.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref darkMode, sizeof(int));
+                int cornerPref = 2; // DWMWCP_ROUND
+                DwmSetWindowAttribute(helper.Handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref cornerPref, sizeof(int));
             }
             catch { }
 
@@ -142,10 +175,12 @@ namespace OneDriveMonitor
                 var contextMenu = new Forms.ContextMenuStrip();
                 var itemShow = new Forms.ToolStripMenuItem("Aç / Göster", null, (s, e) => ShowWindow());
                 var itemPill = new Forms.ToolStripMenuItem("Mini Kapsül Moduna Geç", null, (s, e) => TogglePillMode());
+                var itemRestartOd = new Forms.ToolStripMenuItem("OneDrive'ı Yeniden Başlat", null, (s, e) => RestartOneDriveProcess());
                 var itemExit = new Forms.ToolStripMenuItem("Çıkış", null, (s, e) => ExitApplication());
 
                 contextMenu.Items.Add(itemShow);
                 contextMenu.Items.Add(itemPill);
+                contextMenu.Items.Add(itemRestartOd);
                 contextMenu.Items.Add(new Forms.ToolStripSeparator());
                 contextMenu.Items.Add(itemExit);
 
@@ -173,7 +208,6 @@ namespace OneDriveMonitor
                 g.DrawArc(penArc, 2, 2, 11, 11, -90, sweepAngle);
 
                 IntPtr hIcon = bmp.GetHicon();
-                var oldIcon = _notifyIcon?.Icon;
                 if (_notifyIcon != null)
                 {
                     _notifyIcon.Icon = System.Drawing.Icon.FromHandle(hIcon);
@@ -208,6 +242,8 @@ namespace OneDriveMonitor
                     }
                     _lastSchemaVersion = currentVersion;
                 }
+
+                OneDrivePathResolver.RefreshFolderCache(conn);
             }
             catch { }
         }
@@ -246,11 +282,16 @@ namespace OneDriveMonitor
             // 2. Veritabanı Sorguları
             long remCount = 0;
             long remBytes = 0;
-            long totalFiles = 181263;
+            long totalFiles = 181268;
             string lastFile = "";
             var queueList = new List<QueueItem>();
             var extensionStats = new Dictionary<string, (int count, long size)>(StringComparer.OrdinalIgnoreCase);
             int junkFilesCount = 0;
+            int conflictCount = 0;
+
+            string candidateStuckName = "";
+            string candidateStuckParentId = "";
+            int candidateStuckStatus = 0;
 
             if (File.Exists(_syncDbPath))
             {
@@ -294,7 +335,7 @@ namespace OneDriveMonitor
                         if (reader.Read()) totalFiles = reader.GetInt64(0);
                     }
 
-                    // C. Son Eşitlenen Dosya
+                    // C. Son Eşitlenen Dosya (fileStatus = 2)
                     if (_knownColumns.Contains("fileName") && _knownColumns.Contains("lastChange"))
                     {
                         using var cmd = conn.CreateCommand();
@@ -302,28 +343,62 @@ namespace OneDriveMonitor
                         lastFile = cmd.ExecuteScalar()?.ToString() ?? "";
                     }
 
-                    // D. Akıllı Kuyruk İnceleyici (İlk 15 Bekleyen Dosya)
+                    // D. Takılan Aday Dosya (Aktif bekleyen ilk dosya)
                     if (remCount > 0 && _knownColumns.Contains("fileName"))
                     {
                         using var cmd = conn.CreateCommand();
-                        cmd.CommandText = $"SELECT fileName, size FROM od_ClientFile_Records {where} LIMIT 15";
+                        string parentCol = _knownColumns.Contains("parentResourceID") ? "parentResourceID" : "''";
+                        string statusCol = _knownColumns.Contains("fileStatus") ? "fileStatus" : "0";
+                        cmd.CommandText = $"SELECT fileName, {parentCol}, {statusCol} FROM od_ClientFile_Records {where} LIMIT 1";
+                        using var reader = cmd.ExecuteReader();
+                        if (reader.Read())
+                        {
+                            candidateStuckName = reader.GetString(0);
+                            candidateStuckParentId = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                            candidateStuckStatus = reader.IsDBNull(2) ? 0 : reader.GetInt32(2);
+                        }
+                    }
+
+                    // E. Akıllı Kuyruk İnceleyici (İlk 50 Bekleyen Dosya)
+                    if (remCount > 0 && _knownColumns.Contains("fileName"))
+                    {
+                        using var cmd = conn.CreateCommand();
+                        string parentCol = _knownColumns.Contains("parentResourceID") ? "parentResourceID" : "''";
+                        string statusCol = _knownColumns.Contains("fileStatus") ? "fileStatus" : "0";
+                        cmd.CommandText = $"SELECT fileName, size, {parentCol}, {statusCol} FROM od_ClientFile_Records {where} LIMIT 50";
                         using var reader = cmd.ExecuteReader();
                         while (reader.Read())
                         {
                             string fname = reader.GetString(0);
                             long fsize = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
-                            queueList.Add(new QueueItem { Name = fname, Size = fsize });
+                            string parentId = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                            int status = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
+                            string fullPath = OneDrivePathResolver.ResolveFullPath(parentId, fname);
+
+                            queueList.Add(new QueueItem
+                            {
+                                Name = fname,
+                                Size = fsize,
+                                ParentResourceId = parentId,
+                                FullPath = fullPath,
+                                FileStatus = status
+                            });
 
                             // Uzantı analizi
-                            string ext = System.IO.Path.GetExtension(fname).ToLowerInvariant();
+                            string ext = Path.GetExtension(fname).ToLowerInvariant();
                             if (string.IsNullOrEmpty(ext)) ext = "(diğer)";
                             if (!extensionStats.ContainsKey(ext)) extensionStats[ext] = (0, 0);
                             extensionStats[ext] = (extensionStats[ext].count + 1, extensionStats[ext].size + fsize);
 
-                            // Gereksiz yığın kontrolü
+                            // Gereksiz yığın ve çakışma kontrolleri
                             if (fname.Contains("node_modules") || fname.Contains(".venv") || fname.Contains(".git") || fname.Contains(@"\bin\"))
                             {
                                 junkFilesCount++;
+                            }
+
+                            if (fname.Contains("-DESKTOP-") || fname.Contains("-LAPTOP-") || fname.Contains("(1)") || fname.Contains("(2)"))
+                            {
+                                conflictCount++;
                             }
                         }
                     }
@@ -366,14 +441,15 @@ namespace OneDriveMonitor
             if (remBytes > _maxBatchBytes) _maxBatchBytes = remBytes;
 
             // Kilitli / Takılan Dosya Watchdog Kontrolü
-            if (remCount > 0 && !string.IsNullOrEmpty(lastFile) && lastFile == _previousActiveFile && totalSpeed < 10 * 1024)
+            if (remCount > 0 && !string.IsNullOrEmpty(candidateStuckName) && candidateStuckName == _currentStuckFileName && totalSpeed < 15 * 1024)
             {
-                _stuckFileCounter++;
+                _stuckTickCount++;
             }
             else
             {
-                _stuckFileCounter = 0;
-                _previousActiveFile = lastFile;
+                _stuckTickCount = 0;
+                _currentStuckFileName = candidateStuckName;
+                _currentStuckFilePath = OneDrivePathResolver.ResolveFullPath(candidateStuckParentId, candidateStuckName);
             }
 
             // UI Güncellemeleri
@@ -381,7 +457,7 @@ namespace OneDriveMonitor
             TxtDownloadSpeed.Text = $"{FormatBytes(_smoothedDownloadSpeed)}/s";
             TxtTotalTracked.Text = $"{totalFiles:N0} dosya izleniyor";
             TxtPeakSpeed.Text = $"Zirve: {FormatBytes(_peakSpeed)}/s";
-            TxtSessionSummary.Text = $"Aktarılan: {FormatBytes(_sessionTotalBytesTransferred)}";
+            TxtSessionSummary.Text = $"Oturum: {FormatBytes(_sessionTotalBytesTransferred)}";
 
             if (!string.IsNullOrEmpty(lastFile))
             {
@@ -389,32 +465,66 @@ namespace OneDriveMonitor
             }
 
             // Kuyruk Listesi
-            if (queueList.Count > 0)
-            {
-                QueueListBox.ItemsSource = queueList;
-            }
+            _allQueueItems = queueList;
+            ApplyQueueFilter();
+            TxtQueueSummary.Text = $"{remCount:N0} dosya bekliyor";
 
-            // Uzantı Özeti
+            // Uzantı Profili
             if (extensionStats.Count > 0)
             {
-                var topExt = extensionStats.OrderByDescending(x => x.Value.size).FirstOrDefault();
-                TxtExtensionProfile.Text = $"Profil: {topExt.Key} ({topExt.Value.count} dosya)";
+                var topExts = extensionStats.OrderByDescending(x => x.Value.size).Take(3);
+                var parts = topExts.Select(x => $"{x.Value.count} {x.Key}");
+                TxtExtensionProfile.Text = $"Profil: {string.Join(" • ", parts)}";
+            }
+            else
+            {
+                TxtExtensionProfile.Text = "";
             }
 
-            // Uyarı Rozetleri
-            if (_stuckFileCounter >= 180) // 3 dakika takılı kaldıysa
+            // Yığın Dosyaları Uyarısı
+            if (junkFilesCount > 0)
             {
-                WarningBadge.Visibility = Visibility.Visible;
-                TxtWarning.Text = "⚠️ Dosya Kilitli Olabilir";
+                QueueJunkAlert.Visibility = Visibility.Visible;
+                TxtQueueJunk.Text = $"⚠️ Kuyrukta {junkFilesCount} geliştirici yığın dosyası (.git/node_modules) var.";
             }
-            else if (junkFilesCount > 0)
+            else
+            {
+                QueueJunkAlert.Visibility = Visibility.Collapsed;
+            }
+
+            // Çakışma Rozeti
+            ConflictBadge.Visibility = conflictCount > 0 ? Visibility.Visible : Visibility.Collapsed;
+            if (conflictCount > 0) TxtConflict.Text = $"⚠️ {conflictCount} Çakışma";
+
+            // Takılma Watchdog Değerlendirmesi (> 20 saniye aynı dosyada durup hız < 15 KB/s ise)
+            if (_stuckTickCount >= 20 && !string.IsNullOrEmpty(_currentStuckFileName))
             {
                 WarningBadge.Visibility = Visibility.Visible;
-                TxtWarning.Text = $"⚠️ {junkFilesCount} geliştirici/yığın dosyası";
+                TxtWarning.Text = "⚠️ Dosya Takıldı / Kilitli";
+
+                StuckFileActionPanel.Visibility = Visibility.Visible;
+                TxtStuckFileName.Text = _currentStuckFileName;
+
+                // RestartManager ile kilitleyen süreci bul
+                string lockerText = " (Bulut Yanıt Bekliyor)";
+                if (File.Exists(_currentStuckFilePath))
+                {
+                    var lockers = RestartManagerHelper.FindLockingProcesses(_currentStuckFilePath);
+                    if (lockers.Count > 0)
+                    {
+                        lockerText = $" (Kilit: {lockers[0].ProcessName})";
+                    }
+                    else if (RestartManagerHelper.IsFileLocked(_currentStuckFilePath))
+                    {
+                        lockerText = " (Dosya Yerel Olarak Kilitli)";
+                    }
+                }
+                TxtStuckLocker.Text = lockerText;
             }
             else
             {
                 WarningBadge.Visibility = Visibility.Collapsed;
+                StuckFileActionPanel.Visibility = Visibility.Collapsed;
             }
 
             // Yüzde Hesabı
@@ -430,7 +540,7 @@ namespace OneDriveMonitor
             }
 
             TxtProgressPct.Text = $"%{pct:F1}";
-            ProgressBarFill.Width = Math.Max(0, (pct / 100.0) * 388);
+            ProgressBarFill.Width = Math.Max(0, (pct / 100.0) * 398);
 
             // Dinamik Tepsi İkonu
             UpdateTrayIcon(pct);
@@ -468,7 +578,7 @@ namespace OneDriveMonitor
                 TxtEta.Text = "0 sn";
                 TxtFinishTime.Text = "Bitiş: Tamamlandı";
                 TxtProgressPct.Text = "%100";
-                ProgressBarFill.Width = 388;
+                ProgressBarFill.Width = 398;
 
                 if (!_hasNotifiedCompletion && _maxBatchBytes > 0)
                 {
@@ -483,6 +593,26 @@ namespace OneDriveMonitor
             PillEta.Text = etaText;
 
             DrawSparkline();
+        }
+
+        private void ApplyQueueFilter()
+        {
+            string filter = TxtQueueSearch.Text.Trim();
+            if (string.IsNullOrEmpty(filter))
+            {
+                QueueListBox.ItemsSource = _allQueueItems;
+            }
+            else
+            {
+                QueueListBox.ItemsSource = _allQueueItems
+                    .Where(x => x.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+        }
+
+        private void TxtQueueSearch_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            ApplyQueueFilter();
         }
 
         private void OnSyncCompleted()
@@ -504,7 +634,24 @@ namespace OneDriveMonitor
                 });
             }
 
-            // Güç Otomasyonu
+            // Telegram push bildirimi
+            string tgToken = TxtTelegramToken.Text.Trim();
+            string tgChatId = TxtTelegramChatId.Text.Trim();
+            if (!string.IsNullOrEmpty(tgToken) && !string.IsNullOrEmpty(tgChatId))
+            {
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        string msg = Uri.EscapeDataString("OneDrive eşitlemesi başarıyla tamamlandı! 🎉");
+                        string url = $"https://api.telegram.org/bot{tgToken}/sendMessage?chat_id={tgChatId}&text={msg}";
+                        await _httpClient.GetAsync(url);
+                    }
+                    catch { }
+                });
+            }
+
+            // Otomasyon & Güç Eylemleri
             if (ChkAutoAction.IsChecked == true)
             {
                 int action = CmbPowerAction.SelectedIndex;
@@ -520,13 +667,42 @@ namespace OneDriveMonitor
                         Process.Start("shutdown.exe", "/h");
                         break;
                     case 4: // Yalnızca OneDrive Sürecini Kapat
-                        foreach (var p in Process.GetProcessesByName("OneDrive"))
-                        {
-                            try { p.Kill(); } catch { }
-                        }
+                        RestartOneDriveProcess(terminateOnly: true);
+                        break;
+                    case 5: // Özel Betik Çalıştır
+                        RunCustomPostSyncScript();
                         break;
                 }
             }
+        }
+
+        private void RunCustomPostSyncScript()
+        {
+            string scriptPath = TxtCustomScriptPath.Text.Trim();
+            if (string.IsNullOrEmpty(scriptPath) || !File.Exists(scriptPath)) return;
+
+            try
+            {
+                if (scriptPath.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase))
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "powershell.exe",
+                        Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    });
+                }
+                else
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = scriptPath,
+                        UseShellExecute = true
+                    });
+                }
+            }
+            catch { }
         }
 
         private void DrawSparkline()
@@ -538,7 +714,7 @@ namespace OneDriveMonitor
                 if (values.Count < 2) return;
 
                 double maxVal = Math.Max(values.Max(), 150 * 1024);
-                double w = GraphCanvas.ActualWidth > 0 ? GraphCanvas.ActualWidth : 388;
+                double w = GraphCanvas.ActualWidth > 0 ? GraphCanvas.ActualWidth : 398;
                 double h = GraphCanvas.ActualHeight > 0 ? GraphCanvas.ActualHeight : 75;
                 double step = w / (values.Count - 1);
 
@@ -586,7 +762,218 @@ namespace OneDriveMonitor
             catch { }
         }
 
+        // ================= KİLİT VE TAKILMA AKSİYONLARI =================
+        private void WarningBadge_Click(object sender, MouseButtonEventArgs e)
+        {
+            StuckFileActionPanel.Visibility = StuckFileActionPanel.Visibility == Visibility.Visible
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+        }
+
+        private void BtnRevealStuck_Click(object sender, RoutedEventArgs e)
+        {
+            RevealInExplorer(_currentStuckFilePath);
+        }
+
+        private void BtnNudgeStuck_Click(object sender, RoutedEventArgs e)
+        {
+            NudgeFile(_currentStuckFilePath);
+        }
+
+        private void BtnRestartOneDrive_Click(object sender, RoutedEventArgs e)
+        {
+            RestartOneDriveProcess();
+        }
+
+        private static void RevealInExplorer(string fullPath)
+        {
+            try
+            {
+                if (File.Exists(fullPath))
+                {
+                    Process.Start("explorer.exe", $"/select,\"{fullPath}\"");
+                }
+                else if (Directory.Exists(fullPath))
+                {
+                    Process.Start("explorer.exe", $"\"{fullPath}\"");
+                }
+                else
+                {
+                    string root = OneDrivePathResolver.GetOneDriveRoot();
+                    Process.Start("explorer.exe", $"\"{root}\"");
+                }
+            }
+            catch { }
+        }
+
+        private void NudgeFile(string fullPath)
+        {
+            try
+            {
+                if (File.Exists(fullPath))
+                {
+                    // Dosyayı dokunup uyandır (touch/read-write)
+                    using (var fs = File.Open(fullPath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+                    {
+                        fs.Flush();
+                    }
+                    File.SetLastWriteTime(fullPath, DateTime.Now);
+                    System.Windows.MessageBox.Show($"Dosya başarıyla dürtüldü ve zaman damgası güncellendi:\n{fullPath}", "Dürtme Başarılı", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    System.Windows.MessageBox.Show("Dosya yerel diskte henüz bulunamadı veya bulut tarafında onay bekliyor.", "Bilgi", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"Dosya dürtülemedi: {ex.Message}\nKullanan uygulamayı kapatmayı deneyin.", "Hata", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void RestartOneDriveProcess(bool terminateOnly = false)
+        {
+            Task.Run(() =>
+            {
+                try
+                {
+                    foreach (var p in Process.GetProcessesByName("OneDrive"))
+                    {
+                        try { p.Kill(); } catch { }
+                    }
+
+                    if (!terminateOnly)
+                    {
+                        System.Threading.Thread.Sleep(1500);
+                        string odExe = Environment.ExpandEnvironmentVariables(@"%LOCALAPPDATA%\Microsoft\OneDrive\OneDrive.exe");
+                        if (!File.Exists(odExe))
+                        {
+                            odExe = @"C:\Program Files\Microsoft OneDrive\OneDrive.exe";
+                        }
+                        if (File.Exists(odExe))
+                        {
+                            Process.Start(new ProcessStartInfo
+                            {
+                                FileName = odExe,
+                                Arguments = "/background",
+                                UseShellExecute = true
+                            });
+                        }
+                    }
+                }
+                catch { }
+            });
+
+            if (!terminateOnly)
+            {
+                System.Windows.MessageBox.Show("OneDrive kapatıldı ve arka planda yeniden başlatılıyor...", "OneDrive Yenilendi", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+
+        // ================= KUYRUK MENÜ ETKİLEŞİMLERİ =================
+        private void ContextReveal_Click(object sender, RoutedEventArgs e)
+        {
+            if (QueueListBox.SelectedItem is QueueItem item)
+            {
+                RevealInExplorer(item.FullPath);
+            }
+        }
+
+        private void ContextCopyPath_Click(object sender, RoutedEventArgs e)
+        {
+            if (QueueListBox.SelectedItem is QueueItem item)
+            {
+                System.Windows.Clipboard.SetText(item.FullPath);
+            }
+        }
+
+        private void ContextCheckLock_Click(object sender, RoutedEventArgs e)
+        {
+            if (QueueListBox.SelectedItem is QueueItem item)
+            {
+                var lockers = RestartManagerHelper.FindLockingProcesses(item.FullPath);
+                if (lockers.Count > 0)
+                {
+                    var msg = string.Join("\n", lockers.Select(l => $"• {l.ProcessName} (PID: {l.ProcessId})"));
+                    System.Windows.MessageBox.Show($"Bu dosya şu süreçler tarafından kullanılıyor:\n\n{msg}", "Kilit Bilgisi", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                else
+                {
+                    bool isLocked = RestartManagerHelper.IsFileLocked(item.FullPath);
+                    string status = isLocked ? "Dosya başka bir program tarafından kilitli." : "Dosya üzerinde aktif işlem kilidi bulunamadı (Eşitlemeye hazır).";
+                    System.Windows.MessageBox.Show(status, "Kilit Bilgisi", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+        }
+
+        private void ContextNudge_Click(object sender, RoutedEventArgs e)
+        {
+            if (QueueListBox.SelectedItem is QueueItem item)
+            {
+                NudgeFile(item.FullPath);
+            }
+        }
+
+        // ================= AYARLAR & TEST ETKİLEŞİMLERİ =================
+        private void BtnBrowseScript_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = "Betik Dosyaları (*.bat;*.ps1;*.cmd)|*.bat;*.ps1;*.cmd|Tüm Dosyalar (*.*)|*.*",
+                Title = "Eşitleme Sonrası Çalıştırılacak Betiği Seçin"
+            };
+            if (dlg.ShowDialog() == true)
+            {
+                TxtCustomScriptPath.Text = dlg.FileName;
+            }
+        }
+
+        private void BtnTestNtfy_Click(object sender, RoutedEventArgs e)
+        {
+            string topic = TxtNtfyTopic.Text.Trim();
+            if (string.IsNullOrEmpty(topic))
+            {
+                System.Windows.MessageBox.Show("Lütfen bir ntfy.sh topic adı girin.", "Uyarı", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    var content = new StringContent("OneDrive Monitor test bildirimi basarili! 🚀", Encoding.UTF8);
+                    var resp = await _httpClient.PostAsync($"https://ntfy.sh/{topic}", content);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        Dispatcher.Invoke(() => System.Windows.MessageBox.Show($"'{topic}' konusuna test bildirimi iletildi!", "Başarılı", MessageBoxButton.OK, MessageBoxImage.Information));
+                    }
+                    else
+                    {
+                        Dispatcher.Invoke(() => System.Windows.MessageBox.Show($"ntfy yanıt kodu: {resp.StatusCode}", "Hata", MessageBoxButton.OK, MessageBoxImage.Error));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke(() => System.Windows.MessageBox.Show($"Bağlantı hatası: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Error));
+                }
+            });
+        }
+
         // ================= UI ETKİLEŞİMLERİ =================
+        private void MiniPill_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ClickCount == 2)
+            {
+                TogglePillMode();
+                return;
+            }
+
+            if (e.ChangedButton == MouseButton.Left)
+            {
+                DragMove();
+            }
+        }
+
         private void TogglePillMode_Click(object sender, RoutedEventArgs e)
         {
             TogglePillMode();
@@ -606,8 +993,8 @@ namespace OneDriveMonitor
             {
                 MiniPillView.Visibility = Visibility.Collapsed;
                 FullDashboardView.Visibility = Visibility.Visible;
-                Width = 430;
-                Height = 540;
+                Width = 440;
+                Height = 570;
             }
         }
 
@@ -652,7 +1039,7 @@ namespace OneDriveMonitor
             try
             {
                 string desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-                string csvPath = System.IO.Path.Combine(desktop, $"OneDrive_Sync_Raporu_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
+                string csvPath = Path.Combine(desktop, $"OneDrive_Sync_Raporu_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
 
                 var sb = new StringBuilder();
                 sb.AppendLine("Parametre,Deger");

@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="OneDrive Sync Monitor"
-        Height="540" Width="430"
+        Height="570" Width="440"
         WindowStartupLocation="Manual"
         WindowStyle="None"
         Background="#0F1117"
@@ -45,6 +45,20 @@
             </Style.Triggers>
         </Style>
 
+        <Style x:Key="ActionMiniBtn" TargetType="Button" BasedOn="{StaticResource WindowBtnStyle}">
+            <Setter Property="Background" Value="#1E293B"/>
+            <Setter Property="Foreground" Value="#38BDF8"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="7,3"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#0284C7"/>
+                    <Setter Property="Foreground" Value="White"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <Style x:Key="CloseBtnStyle" TargetType="Button" BasedOn="{StaticResource WindowBtnStyle}">
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
@@ -63,35 +77,39 @@
     <Border Background="#0F1117" BorderBrush="#282D3D" BorderThickness="1" CornerRadius="12">
         <Grid>
             <!-- ================= MINI KAPSÜL (PILL) GÖRÜNÜMÜ ================= -->
-            <Grid x:Name="MiniPillView" Visibility="Collapsed" Background="#0F1117" Height="38">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
+            <Border x:Name="MiniPillView" Visibility="Collapsed" Background="#0F1117" BorderBrush="#0284C7" BorderThickness="1.5" CornerRadius="19" Height="38"
+                    MouseDown="MiniPill_MouseDown" Cursor="SizeAll" ToolTip="Taşımak için sürükleyin, genişletmek için çift tıklayın">
+                <Grid Margin="6,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,8,0">
-                    <TextBlock Text="☁" Foreground="#38BDF8" FontSize="13" FontWeight="Bold" Margin="0,0,4,0"/>
-                    <TextBlock x:Name="PillPct" Text="%0.0" Foreground="#38BDF8" FontSize="11" FontWeight="Bold"/>
-                </StackPanel>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,8,0">
+                        <TextBlock Text="☁" Foreground="#38BDF8" FontSize="13" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <TextBlock x:Name="PillPct" Text="%0.0" Foreground="#38BDF8" FontSize="11" FontWeight="Bold"/>
+                    </StackPanel>
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock x:Name="PillSpeeds" Text="▲ 0 B/s  ▼ 0 B/s" Foreground="#F8FAFC" FontSize="10" FontWeight="SemiBold"/>
-                    <TextBlock Text=" • " Foreground="#64748B" FontSize="10"/>
-                    <TextBlock x:Name="PillEta" Text="0 sn" Foreground="#FBBF24" FontSize="10" FontWeight="Bold"/>
-                </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <TextBlock x:Name="PillSpeeds" Text="▲ 0 B/s  ▼ 0 B/s" Foreground="#F8FAFC" FontSize="10" FontWeight="SemiBold"/>
+                        <TextBlock Text=" • " Foreground="#64748B" FontSize="10"/>
+                        <TextBlock x:Name="PillEta" Text="0 sn" Foreground="#FBBF24" FontSize="10" FontWeight="Bold"/>
+                    </StackPanel>
 
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
-                    <Button Content="🗖" Style="{StaticResource WindowBtnStyle}" Click="TogglePillMode_Click" ToolTip="Genişletilmiş panele dön"/>
-                    <Button Content="✕" Style="{StaticResource CloseBtnStyle}" Click="BtnClose_Click" ToolTip="Tepsiye küçült"/>
-                </StackPanel>
-            </Grid>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
+                        <Button Content="🗖" Style="{StaticResource WindowBtnStyle}" Click="TogglePillMode_Click" ToolTip="Tam Panele Dön"/>
+                        <Button Content="✕" Style="{StaticResource CloseBtnStyle}" Click="BtnClose_Click" ToolTip="Tepsiye Küçült"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
 
             <!-- ================= TAM PANEL GÖRÜNÜMÜ ================= -->
             <Grid x:Name="FullDashboardView" Visibility="Visible">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="36"/> <!-- Başlık Çubuğu -->
                     <RowDefinition Height="Auto"/> <!-- Durum & Progress -->
+                    <RowDefinition Height="Auto"/> <!-- Takılan Dosya / Kilit Rozeti -->
                     <RowDefinition Height="Auto"/> <!-- Hız Kartları -->
                     <RowDefinition Height="Auto"/> <!-- Kalan Süre Kartı -->
                     <RowDefinition Height="*"/>    <!-- Grafik / Kuyruk Çekmecesi / Ayarlar -->
@@ -106,9 +124,9 @@
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                        <Button x:Name="BtnViewQueue" Content="📋 Kuyruk" Style="{StaticResource TabBtnStyle}" Click="BtnViewQueue_Click" ToolTip="Bekleyen dosyaları ve dağılımı göster"/>
-                        <Button x:Name="BtnViewSettings" Content="⚙️ Ayarlar" Style="{StaticResource TabBtnStyle}" Click="BtnViewSettings_Click" ToolTip="Bildirim ve güç ayarları"/>
-                        <Button Content="🗕" Style="{StaticResource WindowBtnStyle}" Click="TogglePillMode_Click" ToolTip="Mini Kapsül Moduna Geç"/>
+                        <Button x:Name="BtnViewQueue" Content="📋 Kuyruk" Style="{StaticResource TabBtnStyle}" Click="BtnViewQueue_Click" ToolTip="Bekleyen dosyaları ve kilit durumunu gör"/>
+                        <Button x:Name="BtnViewSettings" Content="⚙️ Ayarlar" Style="{StaticResource TabBtnStyle}" Click="BtnViewSettings_Click" ToolTip="Otomasyon ve bildirim ayarları"/>
+                        <Button Content="🗕" Style="{StaticResource WindowBtnStyle}" Click="TogglePillMode_Click" ToolTip="Mini Kapsül Modu"/>
                         <Button x:Name="BtnPin" Content="📌" Style="{StaticResource WindowBtnStyle}" Click="BtnPin_Click" ToolTip="Her zaman üstte tut"/>
                         <Button Content="—" Style="{StaticResource WindowBtnStyle}" Click="BtnMinimize_Click" ToolTip="Simge durumuna küçült"/>
                         <Button Content="✕" Style="{StaticResource CloseBtnStyle}" Click="BtnClose_Click" ToolTip="Sistem tepsisine küçült"/>
@@ -116,7 +134,7 @@
                 </Grid>
 
                 <!-- 2. DURUM & İLERLEME -->
-                <StackPanel Grid.Row="1" Margin="14,2,14,6">
+                <StackPanel Grid.Row="1" Margin="14,2,14,4">
                     <Grid Margin="0,0,0,4">
                         <StackPanel Orientation="Horizontal">
                             <Border x:Name="StatusBadge" Background="#261B0C" BorderBrush="#451A03" BorderThickness="1" CornerRadius="10" Padding="8,2">
@@ -126,9 +144,13 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- Uyarı / Hata Rozeti (Gereksiz yığın veya kilitli dosya) -->
-                            <Border x:Name="WarningBadge" Visibility="Collapsed" Background="#3B2506" BorderBrush="#78350F" BorderThickness="1" CornerRadius="10" Margin="6,0,0,0" Padding="6,2">
+                            <!-- Uyarı / Hata Rozetleri -->
+                            <Border x:Name="WarningBadge" Visibility="Collapsed" Background="#3B2506" BorderBrush="#78350F" BorderThickness="1" CornerRadius="10" Margin="6,0,0,0" Padding="6,2" Cursor="Hand" MouseLeftButtonUp="WarningBadge_Click">
                                 <TextBlock x:Name="TxtWarning" Text="⚠️ Kilitli Dosya Şüphesi" Foreground="#FDE047" FontSize="9" FontWeight="SemiBold"/>
+                            </Border>
+
+                            <Border x:Name="ConflictBadge" Visibility="Collapsed" Background="#381010" BorderBrush="#7F1D1D" BorderThickness="1" CornerRadius="10" Margin="6,0,0,0" Padding="6,2">
+                                <TextBlock x:Name="TxtConflict" Text="⚠️ Çakışma Tespit Edildi" Foreground="#FCA5A5" FontSize="9" FontWeight="SemiBold"/>
                             </Border>
                         </StackPanel>
 
@@ -140,8 +162,30 @@
                     </Border>
                 </StackPanel>
 
+                <!-- 2B. TAKILAN DOSYA & KİLİT AKSİYON ÇUBUĞU (WATCHDOG PANELİ) -->
+                <Border x:Name="StuckFileActionPanel" Grid.Row="2" Visibility="Collapsed" Background="#221208" BorderBrush="#B45309" BorderThickness="1" CornerRadius="8" Margin="14,2,14,6" Padding="8,6">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="⚠️ TAKILAN DOSYA: " Foreground="#F59E0B" FontSize="9" FontWeight="Bold"/>
+                            <TextBlock x:Name="TxtStuckFileName" Text="dosya.ext" Foreground="#FDE047" FontSize="9" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" MaxWidth="180"/>
+                            <TextBlock x:Name="TxtStuckLocker" Text=" (Kullanan: TextInputHost)" Foreground="#94A3B8" FontSize="9" Margin="4,0,0,0"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="1" Orientation="Horizontal">
+                            <Button x:Name="BtnRevealStuck" Content="📂 Klasörü Aç" Style="{StaticResource ActionMiniBtn}" Click="BtnRevealStuck_Click" Margin="0,0,4,0"/>
+                            <Button x:Name="BtnNudgeStuck" Content="🔓 Kilidi / Eşitlemeyi Dürt" Style="{StaticResource ActionMiniBtn}" Click="BtnNudgeStuck_Click" Margin="0,0,4,0"/>
+                            <Button x:Name="BtnRestartOneDrive" Content="🔄 OneDrive Yenile" Style="{StaticResource ActionMiniBtn}" Click="BtnRestartOneDrive_Click"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
                 <!-- 3. HIZ KARTLARI -->
-                <Grid Grid.Row="2" Margin="14,0,14,6">
+                <Grid Grid.Row="3" Margin="14,0,14,6">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="8"/>
@@ -166,7 +210,7 @@
                 </Grid>
 
                 <!-- 4. KALAN SÜRE & DETAY BANNERI -->
-                <Border Grid.Row="3" Background="#181B24" BorderBrush="#282D3D" BorderThickness="1" CornerRadius="8" Margin="14,0,14,6" Padding="10,6">
+                <Border Grid.Row="4" Background="#181B24" BorderBrush="#282D3D" BorderThickness="1" CornerRadius="8" Margin="14,0,14,6" Padding="10,6">
                     <StackPanel>
                         <Grid Margin="0,0,0,2">
                             <StackPanel Orientation="Horizontal">
@@ -187,7 +231,7 @@
                 </Border>
 
                 <!-- 5. ÇOK FONKSİYONLU ORTA ALAN: GRAFİK / KUYRUK / AYARLAR -->
-                <Grid Grid.Row="4" Margin="14,0,14,4">
+                <Grid Grid.Row="5" Margin="14,0,14,4">
                     <!-- GÖRÜNÜM A: CANLI GRAFİK (VARSAYILAN) -->
                     <Grid x:Name="ViewGraph" Visibility="Visible">
                         <Grid.RowDefinitions>
@@ -219,27 +263,70 @@
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
-                                <TextBlock Grid.Row="0" Text="SIRADA BEKLEYEN İLK DOSYALAR" Foreground="#38BDF8" FontSize="9" FontWeight="Bold" Margin="2,0,0,4"/>
+                                <Grid Grid.Row="0" Margin="2,0,2,4">
+                                    <TextBlock Text="SIRADA BEKLEYEN DOSYALAR" Foreground="#38BDF8" FontSize="9" FontWeight="Bold" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="TxtQueueSummary" Text="0 dosya" Foreground="#94A3B8" FontSize="9" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                </Grid>
 
-                                <ListBox x:Name="QueueListBox" Grid.Row="1" Background="Transparent" BorderThickness="0" Foreground="#F8FAFC" FontSize="9" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                <!-- Arama & Filtre Kutusu -->
+                                <Border Grid.Row="1" Background="#0F1117" BorderBrush="#282D3D" BorderThickness="1" CornerRadius="4" Margin="0,0,0,4" Padding="4,2">
+                                    <Grid>
+                                        <TextBlock Text="🔍 Kuyrukta ada veya uzantıya göre ara..." Foreground="#475569" FontSize="9" VerticalAlignment="Center" IsHitTestVisible="False">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Text, ElementName=TxtQueueSearch}" Value="">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBox x:Name="TxtQueueSearch" Background="Transparent" Foreground="#F8FAFC" BorderThickness="0" FontSize="9" TextChanged="TxtQueueSearch_TextChanged"/>
+                                    </Grid>
+                                </Border>
+
+                                <!-- Liste -->
+                                <ListBox x:Name="QueueListBox" Grid.Row="2" Background="Transparent" BorderThickness="0" Foreground="#F8FAFC" FontSize="9" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
-                                            <Grid Margin="0,1">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Grid.Column="0" Text="📄" Foreground="#94A3B8" Margin="0,0,4,0"/>
-                                                <TextBlock Grid.Column="1" Text="{Binding Name}" Foreground="#F8FAFC" TextTrimming="CharacterEllipsis"/>
-                                                <TextBlock Grid.Column="2" Text="{Binding FormattedSize}" Foreground="#34D399" Margin="6,0,0,0"/>
-                                            </Grid>
+                                            <Border CornerRadius="3" Padding="4,2" Background="Transparent">
+                                                <Border.ContextMenu>
+                                                    <ContextMenu>
+                                                        <MenuItem Header="📂 Dosyayı Gezgin'de Seç (Explorer)" Click="ContextReveal_Click"/>
+                                                        <MenuItem Header="📋 Dosya Yolunu Kopyala" Click="ContextCopyPath_Click"/>
+                                                        <MenuItem Header="🔍 Kilidi &amp; Kullanan Süreci Denetle" Click="ContextCheckLock_Click"/>
+                                                        <MenuItem Header="🔓 Eşitlemeyi Dürt (Wake/Touch)" Click="ContextNudge_Click"/>
+                                                    </ContextMenu>
+                                                </Border.ContextMenu>
+                                                <Grid ToolTip="{Binding FullPath}">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <TextBlock Grid.Column="0" Text="{Binding StatusIcon}" Foreground="#FBBF24" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding Name}" Foreground="#F8FAFC" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="2" Text="{Binding StatusText}" Foreground="#64748B" FontSize="8" Margin="6,0,6,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="3" Text="{Binding FormattedSize}" Foreground="#34D399" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Border>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
                                 </ListBox>
+
+                                <!-- Yığın ve Dağılım Özeti -->
+                                <Border x:Name="QueueJunkAlert" Grid.Row="3" Background="#1E160A" BorderBrush="#78350F" BorderThickness="1" CornerRadius="4" Margin="0,4,0,0" Padding="6,3" Visibility="Collapsed">
+                                    <TextBlock x:Name="TxtQueueJunk" Text="⚠️ node_modules / .git yığını tespit edildi" Foreground="#FBBF24" FontSize="8" TextTrimming="CharacterEllipsis"/>
+                                </Border>
                             </Grid>
                         </Border>
                     </Grid>
@@ -259,11 +346,39 @@
                                         <ComboBoxItem Content="Uyku Moduna Al (SetSuspendState)"/>
                                         <ComboBoxItem Content="Hazırda Beklet (shutdown /h)"/>
                                         <ComboBoxItem Content="Yalnızca OneDrive.exe Sürecini Kapat"/>
+                                        <ComboBoxItem Content="Özel Betik Çalıştır (.bat / .ps1)"/>
                                     </ComboBox>
+
+                                    <!-- Özel Betik Yolu -->
+                                    <TextBlock Text="Özel Betik Yolu (.bat / .ps1):" Foreground="#94A3B8" FontSize="9" Margin="0,5,0,2"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="TxtCustomScriptPath" Grid.Column="0" Background="#0F1117" Foreground="#F8FAFC" BorderBrush="#282D3D" FontSize="9" Padding="4,2"/>
+                                        <Button Grid.Column="1" Content="Seç..." Style="{StaticResource ActionMiniBtn}" Click="BtnBrowseScript_Click" Margin="4,0,0,0"/>
+                                    </Grid>
 
                                     <!-- ntfy / Telegram Ayarları -->
                                     <TextBlock Text="ntfy.sh Topic Adı (Telefon Bildirimi):" Foreground="#94A3B8" FontSize="9" Margin="0,6,0,2"/>
-                                    <TextBox x:Name="TxtNtfyTopic" Background="#0F1117" Foreground="#F8FAFC" BorderBrush="#282D3D" FontSize="9" Padding="4,2" Text="onedrive_takip_9482"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="TxtNtfyTopic" Grid.Column="0" Background="#0F1117" Foreground="#F8FAFC" BorderBrush="#282D3D" FontSize="9" Padding="4,2" Text="onedrive_takip"/>
+                                        <Button Grid.Column="1" Content="Test Gönder" Style="{StaticResource ActionMiniBtn}" Click="BtnTestNtfy_Click" Margin="4,0,0,0"/>
+                                    </Grid>
+
+                                    <!-- Telegram Bot Desteği -->
+                                    <TextBlock Text="Telegram Bot Token (Opsiyonel):" Foreground="#94A3B8" FontSize="9" Margin="0,6,0,2"/>
+                                    <TextBox x:Name="TxtTelegramToken" Background="#0F1117" Foreground="#F8FAFC" BorderBrush="#282D3D" FontSize="9" Padding="4,2"/>
+
+                                    <TextBlock Text="Telegram Chat ID:" Foreground="#94A3B8" FontSize="9" Margin="0,4,0,2"/>
+                                    <TextBox x:Name="TxtTelegramChatId" Background="#0F1117" Foreground="#F8FAFC" BorderBrush="#282D3D" FontSize="9" Padding="4,2"/>
+
+                                    <CheckBox x:Name="ChkToastNotifications" Content="Windows Bildirim Merkezi (Toast) Göster" Foreground="#94A3B8" FontSize="9" Margin="0,8,0,0" IsChecked="True"/>
 
                                     <!-- Rapor Dışa Aktarma -->
                                     <Button x:Name="BtnExportReport" Content="📊 Oturum Raporunu Masaüstüne CSV Olarak Aktar" Style="{StaticResource WindowBtnStyle}" Click="BtnExportReport_Click" Margin="0,8,0,0" HorizontalAlignment="Left" Foreground="#34D399"/>
@@ -274,8 +389,8 @@
                 </Grid>
 
                 <!-- 6. FOOTER -->
-                <Grid Grid.Row="5" Margin="14,0,14,4" VerticalAlignment="Center">
-                    <TextBlock x:Name="TxtTotalTracked" Text="181,263 dosya izleniyor" Foreground="#64748B" FontSize="9" VerticalAlignment="Center"/>
+                <Grid Grid.Row="6" Margin="14,0,14,4" VerticalAlignment="Center">
+                    <TextBlock x:Name="TxtTotalTracked" Text="181,268 dosya izleniyor" Foreground="#64748B" FontSize="9" VerticalAlignment="Center"/>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                         <TextBlock x:Name="TxtSessionSummary" Text="Oturum: 0 MB" Foreground="#94A3B8" FontSize="9" Margin="0,0,8,0" VerticalAlignment="Center"/>
                         <CheckBox x:Name="ChkAutoAction" Content="Otomasyonu Uygula" Foreground="#94A3B8" FontSize="9" VerticalAlignment="Center" Cursor="Hand" shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
