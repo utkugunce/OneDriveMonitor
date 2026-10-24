@@ -1,0 +1,9 @@
+## Ignore Visual Studio / .NET temporary and build artifacts
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+*.log

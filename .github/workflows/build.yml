@@ -1,0 +1,52 @@
+name: Build & Release OneDrive Sync Monitor
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # 1. Framework-Dependent (Ultra Hafif ~500 KB .exe)
+      - name: Publish Framework-Dependent
+        run: |
+          dotnet publish ./OneDriveMonitor.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o ./publish-fd
+          copy ./icon.ico ./publish-fd/
+
+      # 2. Self-Contained + Trimming (.NET kurulu olmayan makineler için her şey dahil tek .exe)
+      - name: Publish Self-Contained
+        run: |
+          dotnet publish ./OneDriveMonitor.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o ./publish-sc
+          copy ./icon.ico ./publish-sc/
+
+      # 3. Zip Paketleri Oluştur
+      - name: Create Archives
+        shell: pwsh
+        run: |
+          Compress-Archive -Path ./publish-fd/* -DestinationPath ./OneDriveMonitor-Portable-win-x64.zip
+          Compress-Archive -Path ./publish-sc/* -DestinationPath ./OneDriveMonitor-Standalone-win-x64.zip
+
+      # 4. GitHub Release Otomasyonu
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            ./OneDriveMonitor-Portable-win-x64.zip
+            ./OneDriveMonitor-Standalone-win-x64.zip
+          generate_release_notes: true
